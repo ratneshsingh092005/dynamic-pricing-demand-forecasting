@@ -1,199 +1,291 @@
 # E-Commerce Dynamic Pricing & Demand Forecasting Engine
 
-An end-to-end, interview-explainable ML system that forecasts product demand and evaluates candidate prices using a trained LightGBM regression model.
+An end-to-end machine learning system that predicts product demand and recommends optimal prices using historical sales, pricing, competitor pricing, promotions, inventory, and seasonal patterns.
 
-## Problem statement
+The project combines **time-series feature engineering, LightGBM regression, price elasticity analysis, and dynamic pricing optimization**, exposed through a FastAPI backend with a Streamlit frontend.
 
-E-commerce businesses need to estimate demand before changing a product's price. This project combines historical sales, temporal patterns, promotions, inventory and competitor pricing to:
+---
 
-1. Predict product demand.
-2. Quantify the observed relationship between price and demand with a simple elasticity estimate.
-3. Evaluate a small set of candidate prices.
-4. Choose the candidate that maximizes expected profit when unit cost is available, otherwise expected revenue.
-5. Serve the trained model through FastAPI.
-6. Run the API in Docker.
+## Features
 
-The attached project specification explicitly prioritizes correctness and explainability over adding infrastructure such as MLflow, Kubernetes, Kafka, Redis or a database. fileciteturn0file0L13-L29
+- Demand prediction using LightGBM
+- Time-series lag and rolling features
+- Chronological train/test split
+- Price elasticity estimation
+- Dynamic price recommendation
+- Revenue and profit optimization
+- FastAPI REST API
+- Streamlit frontend
+- Pydantic input validation
+- Joblib model serialization
+- Automated tests
+
+---
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    A[Historical sales CSV] --> B[Feature engineering]
-    B --> C[Chronological 80/20 split]
-    C --> D[LightGBM demand model]
-    D --> E[Saved joblib artifact]
-    E --> F[FastAPI]
-    F --> G[/predict-demand]
-    F --> H[/recommend-price]
-    H --> I[5 candidate prices]
-    I --> D
-    I --> J[Revenue / profit calculation]
-    J --> K[Recommended price]
+```text
+Historical Sales Data
+        ↓
+Feature Engineering
+        ↓
+Chronological Split
+        ↓
+LightGBM Demand Model
+        ↓
+Predicted Demand
+        ↓
+Candidate Price Generation
+        ↓
+Revenue / Profit Evaluation
+        ↓
+Recommended Price
+        ↓
+FastAPI
+        ↓
+Streamlit Frontend
 ```
+
+---
 
 ## Dataset
 
-The repository uses a deliberately sized synthetic e-commerce history because the required schema contains business fields that are not reliably present together in a single small public dataset. It contains 12 products across electronics, home, beauty and sports, with daily observations from 2023-01-01 through 2025-12-31 (13,152 rows).
+The project uses a synthetic e-commerce dataset containing daily product-level sales data.
 
-The generator creates realistic relationships rather than random independent columns: seasonality, weekend effects, promotions, holidays, competitor prices, discounts and a negative price-demand relationship are incorporated into the demand process. The generated dataset is therefore a transparent demonstration dataset, not a claim that it represents a real retailer.
+| Column | Description |
+|---|---|
+| `date` | Sales date |
+| `product_id` | Product identifier |
+| `category` | Product category |
+| `units_sold` | Daily demand |
+| `price` | Product selling price |
+| `competitor_price` | Competitor price |
+| `discount` | Discount percentage |
+| `promotion` | Promotion indicator |
+| `inventory` | Available inventory |
+| `holiday` | Holiday indicator |
 
-Required fields are `date`, `product_id`, `category`, `units_sold`, `price`, `competitor_price`, `discount`, `promotion`, `inventory` and `holiday`, matching the project specification. fileciteturn0file0L69-L90
+The dataset contains multiple products across categories including electronics, home, beauty, and sports.
 
-## Feature engineering
+---
 
-Features are generated after sorting by product and date:
+## Feature Engineering
 
-- Temporal: `day_of_week`, `month`, `is_weekend`, `is_holiday`
-- Lags: `lag_1`, `lag_7`, `lag_14`
-- Rolling: `rolling_mean_7`, `rolling_mean_30`, `rolling_std_7`
-- Pricing: `price`, `competitor_price`, `price_difference`, `discount`
-- Business: `promotion`, `inventory`
+### Temporal Features
 
-The rolling features explicitly use `shift(1)` before the rolling window. That means a row cannot use its own demand or future demand to construct a feature. Warm-up rows that do not have the required historical observations are removed.
+```text
+day_of_week
+month
+is_weekend
+is_holiday
+```
 
-This directly addresses the specification's requirements around lag features, rolling features and leakage prevention. fileciteturn0file0L112-L149
+### Lag Features
 
-## Train/test strategy
+```text
+lag_1
+lag_7
+lag_14
+```
 
-A chronological split is used: the earliest 80% of dates are training data and the latest 20% are the future/unseen evaluation period. No random `train_test_split` is used because random splitting would allow observations from later periods to appear in training while evaluating earlier observations, which does not represent the intended forecasting scenario.
+### Rolling Features
 
-The final API never retrains a model per request. It loads `models/demand_model.joblib` at startup, as required by the specification. fileciteturn0file0L152-L185
+```text
+rolling_mean_7
+rolling_mean_30
+rolling_std_7
+```
 
-## Model
+### Pricing & Business Features
 
-Primary model: **LightGBM regression** with a small preprocessing pipeline:
+```text
+price
+competitor_price
+price_difference
+discount
+promotion
+inventory
+```
 
-- One-hot encoding for `product_id` and `category`.
-- Median imputation for numeric features.
-- LightGBM `LGBMRegressor`.
+Lag and rolling features are calculated using previous observations to prevent future information from leaking into the model.
 
-Evaluation on the latest 20% period from the generated dataset:
+---
 
-| Metric | Value |
+## Demand Forecasting
+
+**LightGBM Regressor** is used as the primary demand prediction model.
+
+Target:
+
+```text
+units_sold
+```
+
+A chronological split is used instead of a random train/test split:
+
+```text
+Earlier Data                         Later Data
+|---------------- Training ----------------|--- Test ---|
+                    80%                       20%
+```
+
+### Model Performance
+
+| Metric | Score |
 |---|---:|
 | MAE | 5.13 |
 | RMSE | 6.59 |
 | MAPE | 7.07% |
 | R² | 0.888 |
 
-Top model features in this run include current price, recent rolling demand, price difference, longer-term rolling demand, inventory and month.
+---
 
-Prophet is intentionally not included in the final architecture. The specification makes it optional and says the final API should use LightGBM; skipping an extra dependency keeps the project easier to explain and deploy. fileciteturn0file0L190-L202
+## Price Elasticity
 
-## Price elasticity
+A simple log-price/log-demand regression is used to estimate the relationship between price and demand.
 
-A simple log-log linear regression estimates the observed relationship between price and demand:
+Estimated price elasticity:
 
-`log(1 + units_sold) = intercept + elasticity * log(price)`
+```text
+-0.276
+```
 
-The current generated-data training run produced an elasticity estimate of approximately **-0.276**. This is an association estimate, not a causal estimate. Promotions, seasonality, competitor prices and product differences can confound the relationship, so it should not be interpreted as a controlled experiment result.
+The negative value indicates an inverse association between price and demand in the analyzed data.
 
-This intentionally avoids Double Machine Learning and other causal-inference complexity, as required by the specification. fileciteturn0file0L205-L220
+This is an observational estimate rather than a causal estimate, since factors such as promotions, seasonality, and competitor pricing can also influence demand.
 
-## Pricing algorithm
+---
 
-The pricing engine uses a deliberately simple candidate search:
+## Dynamic Pricing
 
-For a current price of ₹999, it evaluates approximately:
+The pricing engine evaluates candidate prices around the current price.
 
-- ₹899.10
-- ₹949.05
-- ₹999.00
-- ₹1048.95
-- ₹1098.90
+For example:
 
-For every candidate it:
+```text
+Current Price: ₹1000
 
-1. Builds the same model features used by training.
-2. Predicts demand with LightGBM.
-3. Calculates expected revenue: `price × predicted_demand`.
-4. If `unit_cost` is supplied, calculates expected profit: `(price - unit_cost) × predicted_demand`.
-5. Selects the highest valid objective.
+Candidates:
+₹900
+₹950
+₹1000
+₹1050
+₹1100
+```
 
-Minimum and maximum price constraints can be supplied. No complex optimization library is required, matching the specification. fileciteturn0file0L223-L277
+For each candidate price:
+
+1. Required features are generated.
+2. LightGBM predicts demand.
+3. Expected revenue is calculated.
+4. Expected profit is calculated when unit cost is available.
+5. The candidate with the highest objective value is selected.
+
+### Revenue
+
+```text
+Revenue = Price × Predicted Demand
+```
+
+### Profit
+
+```text
+Profit = (Price - Unit Cost) × Predicted Demand
+```
+
+Minimum and maximum price constraints can also be provided.
+
+---
 
 ## API
 
-### `GET /health`
+The backend is built using **FastAPI**.
 
-Returns service/model health.
+### Health Check
 
-### `POST /predict-demand`
+```http
+GET /health
+```
 
-Example:
+Response:
+
+```json
+{
+  "status": "ok",
+  "model_loaded": true
+}
+```
+
+### Predict Demand
+
+```http
+POST /predict-demand
+```
+
+Example request:
 
 ```json
 {
   "product_id": 101,
   "category": "electronics",
-  "price": 999,
-  "competitor_price": 949,
-  "discount": 10,
+  "price": 650,
+  "competitor_price": 670,
+  "discount": 5,
   "promotion": 1,
-  "inventory": 300,
+  "inventory": 400,
   "holiday": 0,
-  "recent_sales": [180,181,182,183,184,185,186,187,180,181,182,183,184,185,186,187,180,181,182,183,184,185,186,187,180,181,182,183,184,185],
-  "date": "2025-12-20"
+  "recent_sales": [65,68,70,67,72,71,69,73,75,70,68,71,74,76,72,70,69,73,75,77,74,72,71,76,78,75,73,77,79,80]
 }
 ```
 
-Example response:
+Response:
 
 ```json
 {
   "product_id": 101,
-  "predicted_demand": 185.42
+  "predicted_demand": 82.41
 }
 ```
 
-### `POST /recommend-price`
+### Recommend Price
 
-Example:
-
-```json
-{
-  "product_id": 101,
-  "category": "electronics",
-  "current_price": 999,
-  "competitor_price": 949,
-  "discount": 10,
-  "promotion": 1,
-  "inventory": 300,
-  "holiday": 0,
-  "unit_cost": 600,
-  "minimum_price": 850,
-  "maximum_price": 1150,
-  "recent_sales": [180,181,182,183,184,185,186,187,180,181,182,183,184,185,186,187,180,181,182,183,184,185,186,187,180,181,182,183,184,185],
-  "date": "2025-12-20"
-}
+```http
+POST /recommend-price
 ```
 
-The response contains the recommended price, predicted demand, expected revenue, expected profit and the individual candidate evaluations.
+This endpoint evaluates multiple candidate prices and returns the recommended price along with predicted demand, expected revenue, and expected profit.
 
-FastAPI and Pydantic validation reject invalid values such as negative prices or fewer than 30 recent daily sales observations. The endpoint design follows the requested `/health`, `/predict-demand` and `/recommend-price` interface. fileciteturn0file0L280-L342
+---
 
-## Project structure
+## Streamlit Frontend
+
+The project includes a lightweight Streamlit interface with two sections.
+
+### Demand Prediction
+
+- Product information
+- Pricing information
+- Promotion and inventory
+- Recent sales
+- Predicted demand
+
+### Dynamic Pricing
+
+- Current price
+- Unit cost
+- Price constraints
+- Competitor price
+- Recent sales
+- Recommended price
+- Candidate price evaluation
+
+---
+
+## Project Structure
 
 ```text
 ecommerce-dynamic-pricing/
-├── data/
-│   ├── raw/
-│   │   └── sales.csv
-│   └── processed/
-│       └── features.csv
-├── notebooks/
-│   └── exploration.ipynb
-├── src/
-│   ├── data/
-│   │   └── generate_dataset.py
-│   ├── features/
-│   │   └── build_features.py
-│   ├── models/
-│   │   └── train.py
-│   └── pricing/
-│       ├── elasticity.py
-│       └── optimizer.py
+│
 ├── app/
 │   ├── main.py
 │   ├── schemas.py
@@ -201,96 +293,162 @@ ecommerce-dynamic-pricing/
 │   └── services/
 │       ├── demand_service.py
 │       └── pricing_service.py
+│
+├── data/
+│   ├── raw/
+│   └── processed/
+│
+├── frontend/
+│   ├── app.py
+│   └── requirements.txt
+│
 ├── models/
-│   ├── demand_model.joblib
-│   ├── feature_importance.csv
-│   └── metadata.json
+│
+├── notebooks/
+│   └── exploration.ipynb
+│
+├── src/
+│   ├── features/
+│   │   └── build_features.py
+│   └── pricing/
+│       ├── elasticity.py
+│       └── optimizer.py
+│
 ├── tests/
-│   ├── test_features.py
-│   ├── test_pricing.py
-│   └── test_api.py
+│
 ├── train.py
 ├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
-├── .dockerignore
-├── .gitignore
 └── README.md
 ```
 
-## Run locally
+---
 
-### 1. Install dependencies
+## Installation
+
+Clone the repository:
 
 ```bash
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
+git clone https://github.com/ratneshsingh092005/dynamic-pricing-demand-forecasting.git
+cd dynamic-pricing-demand-forecasting
+```
 
+Create a virtual environment.
+
+### Windows
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+```
+
+Install dependencies:
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Train the model
+---
+
+## Train the Model
 
 ```bash
 python train.py
 ```
 
-This generates the dataset, features, evaluation metrics and model artifacts.
+This generates the trained LightGBM model:
 
-### 3. Start the API
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+```text
+models/demand_model.joblib
 ```
 
-Open Swagger at `http://localhost:8000/docs`.
+---
 
-### 4. Run tests
+## Run FastAPI
 
 ```bash
-pytest -q
+uvicorn app.main:app --reload
 ```
 
-## Docker
+API:
 
-Build:
+```text
+http://127.0.0.1:8000
+```
+
+Interactive API documentation:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+---
+
+## Run Streamlit
+
+Install frontend dependencies:
 
 ```bash
-docker build -t ecommerce-pricing .
+pip install -r frontend/requirements.txt
 ```
 
 Run:
 
 ```bash
-docker run -p 8000:8000 ecommerce-pricing
+streamlit run frontend/app.py
 ```
 
-Or:
+Frontend:
+
+```text
+http://localhost:8501
+```
+
+---
+
+## Testing
+
+Run the test suite:
 
 ```bash
-docker compose up --build
+python -m pytest -q
 ```
 
-The image trains the model during the image build, so the container starts with the required model artifact and does not retrain for each API request. The requested Docker workflow is `docker build -t ecommerce-pricing .` followed by `docker run -p 8000:8000 ecommerce-pricing`. fileciteturn0file0L418-L429
+Current result:
+
+```text
+9 passed
+```
+
+Tests cover feature engineering, pricing logic, candidate price generation, API endpoints, and request validation.
+
+---
+
+## Tech Stack
+
+**Python | LightGBM | Pandas | NumPy | Scikit-learn | FastAPI | Streamlit | Pydantic | Joblib | Matplotlib | Seaborn**
+
+---
 
 ## Limitations
 
-- The dataset is synthetic and therefore cannot establish real-world business performance.
-- The elasticity estimate is observational, not causal.
-- Candidate prices are limited to five points around the current price.
-- The model assumes recent demand history is available at serving time.
-- Inventory is treated as an input feature, not as a full stockout simulation.
-- There is no online learning or automatic retraining.
-- Forecast accuracy can degrade when market conditions change.
-- Revenue/profit estimates are model estimates, not guarantees.
+- Dataset is synthetic and does not represent real customer behavior.
+- Price elasticity is observational rather than causal.
+- Pricing optimization evaluates a limited candidate-price range.
+- External factors such as customer segments and marketing campaigns are not modeled.
+- The model currently requires retraining when new historical data becomes available.
 
-## Future improvements
+---
 
-If the project later needs more production complexity, reasonable next steps would be model monitoring, automated retraining, richer causal price experimentation, a real transactional data source, uncertainty estimates and more sophisticated inventory constraints. These are deliberately outside the current scope.
+## Future Improvements
 
-## Interview explanation in one minute
+- Real-world sales data integration
+- Automated model retraining
+- Inventory-aware pricing strategies
+- More robust causal elasticity estimation
+- Model monitoring and drift detection
+- Cloud deployment
+- Authentication for production APIs
 
-> “I built a demand forecasting and dynamic pricing engine for e-commerce. I first sort sales chronologically and create lag and rolling features without using future demand. I use a time-based 80/20 split instead of a random split, then train LightGBM to predict units sold. For pricing, I evaluate five candidate prices around the current price, run each through the demand model, calculate expected revenue or profit, and choose the best valid candidate. I also calculate a simple log-log price elasticity as an interpretable analysis, while clearly treating it as an observational relationship rather than a causal estimate. The trained pipeline is serialized with Joblib and served through FastAPI in Docker.”
+---
+
+
