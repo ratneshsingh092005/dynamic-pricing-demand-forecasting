@@ -1,0 +1,35 @@
+{
+  "features": [
+    "product_id",
+    "category",
+    "day_of_week",
+    "month",
+    "is_weekend",
+    "is_holiday",
+    "lag_1",
+    "lag_7",
+    "lag_14",
+    "rolling_mean_7",
+    "rolling_mean_30",
+    "rolling_std_7",
+    "price",
+    "competitor_price",
+    "price_difference",
+    "discount",
+    "promotion",
+    "inventory"
+  ],
+  "target": "units_sold",
+  "train_rows": 10224,
+  "test_rows": 2568,
+  "train_end": "2025-05-31",
+  "test_start": "2025-06-01",
+  "metrics": {
+    "MAE": 5.129113049818696,
+    "RMSE": 6.592788841958631,
+    "MAPE_percent": 7.072042177486769,
+    "R2": 0.887675244862552
+  },
+  "price_elasticity": -0.27561741124649985,
+  "objective": "regression"
+}
